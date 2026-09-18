@@ -2,7 +2,7 @@ import urllib.request
 import json
 from datetime import datetime
 
-WEBHOOK_URL = "https://discordapp.com/api/webhooks/1550377530228477974/qctcT78BZLT56aQW7skxtULN00drer8be6eEdhJT-ocwYp5mpiLOfq8Ef6pSPKFvMl28"
+WEBHOOK_URL = "https://discord.com/api/webhooks/1550377530228477974/qctcT78BZLT56aQW7skxtULN00drer8be6eEdhJT-ocwYp5mpiLOfq8Ef6pSPKFvMl28"
 
 def get_market_summary():
     today = datetime.now().strftime("%Y-%m-%d")
