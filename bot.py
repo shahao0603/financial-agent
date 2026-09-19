@@ -6,25 +6,65 @@ from datetime import datetime
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-def get_market_summary():
-    today = datetime.now().strftime("%Y-%m-%d")
-    message = f"""
+def generate_ai_market_summary():
+    today = datetime.now().strftime("%Y-%m-%d (%A)")
+    
+    # 如果有設定 Gemini API，就讓 AI 即時生成專業快報
+    if GEMINI_API_KEY:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        
+        prompt = f"""
+        請以專業金融與房市從業人員的視角，為我撰寫一份「每日財經與房市快報」（日期：{today}）。
+        排版格式需包含以下區塊，語氣專業、俐落、切中要害：
+        
+        📈 【每日財經與房市快報】 - {today}
+        
+        📊 【股市與總經要聞】
+        • 美國與國際：...
+        • 台股動態：...
+        • 總經指標：...
+        
+        🏠 【房市最新動態】
+        • 政策與利率：...
+        • 區域焦點：...
+        
+        ---
+        *🚀 來自 GitHub Actions 雲端 AI 機器人自動推送！*
+        """
+        
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}]
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        try:
+            with urllib.request.urlopen(req) as response:
+                res_data = json.loads(response.read().decode("utf-8"))
+                ai_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                return ai_text.strip()
+        except Exception as e:
+            print(generate_ai_market_summary, "Gemini 生成失敗，改用預設備用文字：", e)
+
+    # 備用保底文字
+    return f"""
 📈 【每日財經與房市快報】 - {today}
 
 📊 【股市與總經要聞】
-• 美國與國際：市場聚焦最新通膨數據與聯準會利率走向，科技股震盪整理。
-• 台股動態：權值股近期表現牽動大盤，法人資金持續輪動，留意成交量變化與匯率波動。
-• 總經指標：出口數據與景氣對策燈號持續為市場風向球。
+• 國際與台股維持正常盤整，資金持續在各類股間輪動。
 
 🏠 【房市最新動態】
-• 政策與利率：央行信用管制與房貸水位相對緊縮，市場交易節奏放緩，以自住與換屋需求為主。
-• 區域焦點：六都及主要重劃區預售屋實價登錄價格波動趨於平穩，建商推案策略轉趨保守觀望。
+• 房市受信用管制與房貸水位影響，市場以自住與換屋需求為主。
 
 ---
 *🚀 來自 GitHub Actions 雲端機器人自動推送！*
-"""
-    return message.strip()
+""".strip()
 
 def send_to_discord(content):
     if not DISCORD_WEBHOOK_URL:
@@ -74,6 +114,6 @@ def send_to_line(content):
         print("LINE 發送失敗：", e)
 
 if __name__ == "__main__":
-    content = get_market_summary()
+    content = generate_ai_market_summary()
     send_to_discord(content)
     send_to_line(content)
