@@ -3,7 +3,6 @@ import json
 import os
 from datetime import datetime
 
-# 從 GitHub 秘密保險箱安全讀取網址
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 def get_market_summary():
@@ -32,11 +31,22 @@ def send_to_discord():
         
     content = get_market_summary()
     data = json.dumps({"content": content}).encode("utf-8")
-    req = urllib.request.Request(WEBHOOK_URL, data=data, headers={"Content-Type": "application/json"})
+    # 加上 User-Agent 模擬正常瀏覽器請求，避免被 Discord 雲端防火牆誤殺
+    req = urllib.request.Request(
+        WEBHOOK_URL, 
+        data=data, 
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+    )
     
     try:
         with urllib.request.urlopen(req) as response:
             print("發送成功！狀態碼：", response.status)
+    except urllib.error.HTTPError as e:
+        print(f"發送失敗 (HTTPError)：狀態碼 {e.code}，原因：{e.reason}")
+        print("詳細內容：", e.read().decode())
     except Exception as e:
         print("發送失敗：", e)
 
