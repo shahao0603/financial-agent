@@ -9,22 +9,10 @@ LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-def download_font():
-    """自動從開源專案下載中文字型（Noto Sans TC），確保雲端畫圖不出方框"""
-    font_path = "NotoSansTC-Regular.ttf"
-    if not os.path.exists(font_path):
-        print("正在下載中文字型...")
-        font_url = "https://github.com/google/fonts/raw/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
-        try:
-            urllib.request.urlretrieve(font_url, font_path)
-            print("中文字型下載成功！")
-        except Exception as e:
-            print("字型下載失敗，使用系統預設：", e)
-    return font_path if os.path.exists(font_path) else None
-
 def generate_market_report():
     today = datetime.now().strftime("%Y-%m-%d (%A)")
     
+    # 預設保底文字
     text_content = f"""
 📈 【每日財經與房市快報】 - {today}
 
@@ -41,44 +29,57 @@ def generate_market_report():
 """.strip()
 
     if GEMINI_API_KEY:
+        # 使用正確穩定的 Gemini 2.5 Flash API  endpoint
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        
+        prompt = f"""
+        請以專業金融與房市從業人員的視角，為我撰寫一份簡明扼要的「每日財經與房市快報」（日期：{today}）。
+        排版包含股市總經與房市最新動態，語氣專業俐落。
+        """
+        
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}]
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-            prompt = f"請以專業金融從業人員角度，為我撰寫一份精煉的「每日財經與房市快報」（日期：{today}），包含股市總經與房市最新動態，語氣專業俐落。"
-            payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode("utf-8")
-            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req) as res:
                 res_data = json.loads(res.read().decode("utf-8"))
                 text_content = res_data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                print("AI 內容生成成功！")
         except Exception as e:
             print("AI 生成失敗，使用預設文字：", e)
             
     return text_content
 
 def create_report_image(date_str, report_text):
-    """動態繪製一張精美的財經快報資訊圖卡"""
+    """使用內建字型繪製質感資訊圖卡，確保絕對不會下載失敗"""
     width, height = 1200, 670
     image = Image.new("RGB", (width, height), color="#1e1e2f")
     draw = ImageDraw.Draw(image)
     
-    font_path = download_font()
+    # 使用 Pillow 內建字型，免去下載外部檔案的風險
     try:
-        title_font = ImageFont.truetype(font_path, 36) if font_path else ImageFont.load_default()
-        sub_font = ImageFont.truetype(font_path, 22) if font_path else ImageFont.load_default()
-        body_font = ImageFont.truetype(font_path, 20) if font_path else ImageFont.load_default()
+        font = ImageFont.load_default()
     except Exception:
-        title_font = sub_font = body_font = ImageFont.load_default()
+        font = None
 
     # 頂部裝飾彩帶
     draw.rectangle([0, 0, width, 12], fill="#00d2ff")
     
     # 標題與日期
-    draw.text((60, 45), "📈 每日財經與房市快報", fill="#ffffff", font=title_font)
-    draw.text((60, 95), f"Date: {date_str}", fill="#00d2ff", font=sub_font)
+    draw.text((60, 45), "📈 每日財經與房市快報", fill="#ffffff")
+    draw.text((60, 95), f"Date: {date_str}", fill="#00d2ff")
     
     # 內容底板
     draw.rounded_rectangle([50, 145, 1150, 600], radius=15, fill="#252538")
     
-    # 將 AI 文字畫到圖卡上
+    # 將文字畫到圖卡上
     lines = report_text.split("\n")
     y_offset = 175
     for line in lines:
@@ -86,32 +87,61 @@ def create_report_image(date_str, report_text):
             y_offset += 10
             continue
         if y_offset < 570:
-            draw.text((80, y_offset), line[:55], fill="#d1d1e9", font=body_font)
-            y_offset += 32
+            draw.text((80, y_offset), line[:65], fill="#d1d1e9")
+            y_offset += 28
 
     # 底部標語
-    draw.text((60, 625), "🚀 Generated automatically by GitHub Actions & Python", fill="#8888a0", font=sub_font)
+    draw.text((60, 625), "🚀 Generated automatically by GitHub Actions & Python", fill="#8888a0")
     
     image_path = "daily_report.png"
     image.save(image_path)
     return image_path
 
 def send_to_discord(content):
-    if not DISCORD_WEBHOOK_URL: return
+    if not DISCORD_WEBHOOK_URL: 
+        print("未設定 Discord Webhook")
+        return
+        
     data = json.dumps({"content": content}).encode("utf-8")
-    req = urllib.request.Request(DISCORD_WEBHOOK_URL, data=data, headers={"Content-Type": "application/json"})
+    # 加上標準 User-Agent 避免被 Discord 擋下 (403 Forbidden)
+    req = urllib.request.Request(
+        DISCORD_WEBHOOK_URL, 
+        data=data, 
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+    )
     try:
-        with urllib.request.urlopen(req) as res: print("Discord 發送成功：", res.status)
-    except Exception as e: print("Discord 失敗：", e)
+        with urllib.request.urlopen(req) as res: 
+            print("Discord 發送成功！狀態碼：", res.status)
+    except Exception as e: 
+        print("Discord 發送失敗：", e)
 
 def send_to_line(content):
-    if not LINE_TOKEN or not LINE_GROUP_ID: return
+    if not LINE_TOKEN or not LINE_GROUP_ID: 
+        print("未設定 LINE Token 或 Group ID")
+        return
+        
     url = "https://api.line.me/v2/bot/message/push"
-    data = json.dumps({"to": LINE_GROUP_ID, "messages": [{"type": "text", "text": content}]}).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json", "Authorization": f"Bearer {LINE_TOKEN}"})
+    data = json.dumps({
+        "to": LINE_GROUP_ID,
+        "messages": [{"type": "text", "text": content}]
+    }).encode("utf-8")
+    
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LINE_TOKEN}"
+        }
+    )
     try:
-        with urllib.request.urlopen(req) as res: print("LINE 發送成功：", res.status)
-    except Exception as e: print("LINE 失敗：", e)
+        with urllib.request.urlopen(req) as res: 
+            print("LINE 發送成功！狀態碼：", res.status)
+    except Exception as e: 
+        print("LINE 發送失敗：", e)
 
 if __name__ == "__main__":
     today_str = datetime.now().strftime("%Y-%m-%d")
