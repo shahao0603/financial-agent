@@ -60,7 +60,6 @@ def create_report_image(date_str, report_text):
     image = Image.new("RGB", (width, height), color="#1e1e2f")
     draw = ImageDraw.Draw(image)
     
-    # 載入中文字型
     font_path = download_font()
     try:
         title_font = ImageFont.truetype(font_path, 36) if font_path else ImageFont.load_default()
@@ -72,20 +71,20 @@ def create_report_image(date_str, report_text):
     # 頂部裝飾彩帶
     draw.rectangle([0, 0, width, 12], fill="#00d2ff")
     
-    # 繪製標題與日期
+    # 標題與日期
     draw.text((60, 45), "📈 每日財經與房市快報", fill="#ffffff", font=title_font)
     draw.text((60, 95), f"Date: {date_str}", fill="#00d2ff", font=sub_font)
     
     # 內容底板
     draw.rounded_rectangle([50, 145, 1150, 600], radius=15, fill="#252538")
     
-    # 將 AI 生成的文字切行畫到圖卡上
+    # 將 AI 文字畫到圖卡上
     lines = report_text.split("\n")
     y_offset = 175
     for line in lines:
         if line.strip().startswith("📈") or line.strip().startswith("📊") or line.strip().startswith("🏠") or line.strip().startswith("---"):
             y_offset += 10
-            continue # 跳過過長的大標題，或特別繪製
+            continue
         if y_offset < 570:
             draw.text((80, y_offset), line[:55], fill="#d1d1e9", font=body_font)
             y_offset += 32
@@ -119,6 +118,5 @@ if __name__ == "__main__":
     report_text = generate_market_report()
     img_file = create_report_image(today_str, report_text)
     
-    # 發送文字快報
     send_to_discord(report_text)
     send_to_line(report_text)
