@@ -23,12 +23,12 @@ def generate_live_market_report():
         內容需包含：
         1. 股市與總經要聞（美股主要指數、國際盤勢、台股/亞股焦點）。
         2. 房市政策與動態（貸款政策、信用管制、房市實際交易觀察）。
-        請確保排版俐落、乾貨滿點，不要使用罐頭文字，展現即時專業度。
+        請確保排版俐落、乾貨滿點，展現即時專業度。
         """
         
-        # 呼叫最新穩定模型
+        # 直接對應你在 AI Studio 看到的模型代號
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3-flash-preview',
             contents=prompt,
         )
         
@@ -37,7 +37,6 @@ def generate_live_market_report():
         
     except Exception as e:
         print("AI 生成發生錯誤，詳細原因：", e)
-        # 如果真的出錯，直接回傳錯誤訊息，讓你一眼看出問題
         return f"【系統提示】今日 ({today}) AI 內容生成失敗，錯誤原因：{e}"
 
 def send_to_discord(content):
