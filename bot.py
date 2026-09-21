@@ -16,7 +16,7 @@ def generate_live_market_report():
         return None
 
     # 使用穩定的 Gemini 1.5 Flash API
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}""
     
     prompt = f"""
     請以專業金融與房市從業人員的視角，為我撰寫一份今日（日期：{today}）的專業市場快報。
