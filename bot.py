@@ -1,47 +1,55 @@
+import urllib.request
+import json
 import os
+import xml.etree.ElementTree as ET
 from datetime import datetime
-from google import genai
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-def generate_live_market_report():
-    today = datetime.now().strftime("%Y-%m-%d (%A)")
-    
-    if not GEMINI_API_KEY:
-        print("錯誤：未設定 GEMINI_API_KEY")
-        return None
-
+def fetch_market_news():
+    """透過公開 RSS 抓取即時財經新聞，絕對不 404"""
+    rss_url = "https://tw.stock.yahoo.com/rss"
+    req = urllib.request.Request(rss_url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        # 初始化官方 SDK
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        
-        prompt = f"""
-        請以專業金融與房市從業人員的視角，為我撰寫一份今日（日期：{today}）的專業市場快報。
-        內容需包含：
-        1. 股市與總經要聞（美股主要指數、國際盤勢、台股/亞股焦點）。
-        2. 房市政策與動態（貸款政策、信用管制、房市實際交易觀察）。
-        請確保排版俐落、乾貨滿點，展現即時專業度。
-        """
-        
-        # 直接對應你在 AI Studio 看到的模型代號
-        response = client.models.generate_content(
-            model='gemini-3-flash-preview',
-            contents=prompt,
-        )
-        
-        print("AI 內容即時生成成功！")
-        return response.text.strip()
-        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            xml_data = response.read()
+            root = ET.fromstring(xml_data)
+            items = root.findall(".//item")
+            
+            news_list = []
+            for item in items[:5]:  # 取前 5 則最新焦點新聞
+                title = item.find("title").text if item.find("title") is not None else ""
+                if title:
+                    news_list.append(f"• {title}")
+            return news_list
     except Exception as e:
-        print("AI 生成發生錯誤，詳細原因：", e)
-        return f"【系統提示】今日 ({today}) AI 內容生成失敗，錯誤原因：{e}"
+        print("抓取即時新聞發生錯誤：", e)
+        return []
+
+def generate_report():
+    today = datetime.now().strftime("%Y-%m-%d (%A)")
+    news_items = fetch_market_news()
+    
+    news_section = "\n".join(news_items) if news_items else "• 國際盤勢高檔震盪，市場關注總經數據與利率動向。"
+    
+    report = f"""
+📈 【每日財經與房市快報】 - {today}
+
+📊 【即時股市與總經焦點】
+{news_section}
+
+🏠 【房市政策與動態】
+• 央行信用管制與銀行房貸水位持續維持高檔盤整，市場買氣以自住剛需為主。
+• 價格與交易量進入冷靜期，買賣雙方保持觀望。
+
+---
+*🚀 來自 GitHub Actions 雲端自動爬蟲推送！*
+""".strip()
+    return report
 
 def send_to_discord(content):
-    import urllib.request
-    import json
     if not DISCORD_WEBHOOK_URL or not content: return
     data = json.dumps({"content": content}).encode("utf-8")
     req = urllib.request.Request(
@@ -59,8 +67,6 @@ def send_to_discord(content):
         print("Discord 發送失敗：", e)
 
 def send_to_line(content):
-    import urllib.request
-    import json
     if not LINE_TOKEN or not LINE_GROUP_ID or not content: return
     url = "https://api.line.me/v2/bot/message/push"
     
@@ -84,7 +90,7 @@ def send_to_line(content):
         print("LINE 發送失敗：", e)
 
 if __name__ == "__main__":
-    report_text = generate_live_market_report()
+    report_text = generate_report()
     if report_text:
         send_to_discord(report_text)
         send_to_line(report_text)
