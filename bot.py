@@ -10,7 +10,7 @@ LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")
 
 def fetch_rss_titles(query, limit=3):
-    """強效動態爬蟲：直接抓取當下最新鮮的 RSS 標題"""
+    """動態抓取當下最新鮮的 RSS 標題"""
     encoded_q = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     
@@ -36,13 +36,12 @@ def generate_live_report():
 
     # 1. 動態抓取美股台股最新標題
     stock_items = fetch_rss_titles("美股 台股 總經", 2)
-    stock_content = "\n".join(stock_items) if stock_items else f"• 【即時監控 {now.strftime('%H:%M')}】全球股市與總經數據連線中，無最新快報標題。"
+    stock_content = "\n".join(stock_items) if stock_items else f"• 【即時監控 {now.strftime('%H:%M')}】全球股市與總經數據連線中。"
 
     # 2. 動態抓取房市房貸最新標題
     re_items = fetch_rss_titles("房貸 央行 房市 信用管制", 2)
-    re_content = "\n".join(re_items) if re_items else f"• 【即時監控 {now.strftime('%H:%M')}】房市與央行政策動態連線中，無最新快報標題。"
+    re_content = "\n".join(re_items) if re_items else f"• 【即時監控 {now.strftime('%H:%M')}】房市與央行政策動態連線中。"
 
-    # 組合出乾淨、絕對沒有寫死長篇大論的動態報告
     report = f"""
 📈 【每日財經與房市{session_name}】 - {today_str}
 
@@ -75,7 +74,6 @@ def send_to_discord(content):
         print("Discord 發送失敗：", e)
 
 def send_to_line(content):
-    if not LINE_TOKEN | not LINE_GROUP_ID or not content: return # 修正語法
     if not LINE_TOKEN or not LINE_GROUP_ID or not content: return
     url = "https://api.line.me/v2/bot/message/push"
     payload_data = json.dumps({
