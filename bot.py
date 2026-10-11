@@ -11,7 +11,11 @@ from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Taipei")
-DB_URL = os.environ["SUPABASE_URL"].rstrip("/")
+DB_URL = os.environ["SUPABASE_URL"].strip().rstrip("/")
+expected_host = "kzramekpvgrrekypayey.supabase.co"
+parsed_url = urllib.parse.urlparse(DB_URL)
+if parsed_url.scheme != "https" or parsed_url.hostname != expected_host or parsed_url.path not in ("", "/"):
+    raise RuntimeError("SUPABASE_URL is invalid. Set the GitHub Secret to https://" + expected_host + " (no quotes, paths or spaces).")
 DB_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 DISCORD = os.environ["DISCORD_WEBHOOK_URL"]
 LINE_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
