@@ -1,4 +1,5 @@
 import hashlib
+import urllib.error
 import json
 import os
 import re
@@ -74,10 +75,23 @@ def duplicate(item, seen):
     return False
 
 def push_discord(message):
+    # Never print the webhook URL: it contains a secret token.
+    if not DISCORD.startswith("https://discord.com/api/webhooks/"):
+        raise RuntimeError("Discord webhook URL format is invalid")
     data = json.dumps({"content": message}, ensure_ascii=False).encode()
-    req = urllib.request.Request(DISCORD, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as response:
-        return response.status in (200, 204)
+    req = urllib.request.Request(DISCORD, data=data, headers={
+        "Content-Type": "application/json",
+        "User-Agent": "FinanceAgent/1.0 (+https://github.com/shahao0603/financial-agent)",
+        "Accept": "application/json",
+    }, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            return response.status in (200, 204)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(600).decode("utf-8", errors="replace")
+        # Discord's error body may contain useful codes; never log the URL or token.
+        print(f"Discord HTTP status={exc.code}; response={body}")
+        raise RuntimeError(f"Discord HTTP {exc.code}") from None
 
 def push_line(message):
     data = json.dumps({"to": LINE_GROUP, "messages": [{"type": "text", "text": message}]},
