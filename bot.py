@@ -1,98 +1,146 @@
-import urllib.request
+import hashlib
 import json
 import os
+import re
 import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
+from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 
-DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-LINE_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
-LINE_GROUP_ID = os.environ.get("LINE_GROUP_ID")
+TZ = ZoneInfo("Asia/Taipei")
+DB_URL = os.environ["SUPABASE_URL"].rstrip("/")
+DB_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+DISCORD = os.environ["DISCORD_WEBHOOK_URL"]
+LINE_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+LINE_GROUP = os.environ["LINE_GROUP_ID"]
+LOOKBACK_HOURS = 48
 
-def fetch_rss_titles(query, limit=3):
-    """動態抓取當下最新鮮的 RSS 標題"""
-    encoded_q = urllib.parse.quote(query)
-    url = f"https://news.google.com/rss/search?q={encoded_q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-    
-    titles = []
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-        with urllib.request.urlopen(req, timeout=6) as response:
-            root = ET.fromstring(response.read())
-            for item in root.findall(".//item")[:limit]:
-                t = item.find("title").text if item.find("title") is not None else ""
-                if t:
-                    titles.append(f"• {t}")
-    except Exception as e:
-        print(f"抓取關鍵字 ({query}) 發生錯誤: {e}")
-        
-    return titles
+def db_request(method, table, params="", payload=None):
+    url = f"{DB_URL}/rest/v1/{table}" + (f"?{params}" if params else "")
+    headers = {"apikey": DB_KEY, "Authorization": f"Bearer {DB_KEY}",
+               "Content-Type": "application/json", "Prefer": "return=representation"}
+    data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=20) as response:
+        body = response.read()
+        return json.loads(body) if body else []
 
-def generate_live_report():
-    now = datetime.now()
-    today_str = now.strftime("%Y-%m-%d (%A)")
-    current_hour = now.hour
-    session_name = "早盤重點快報" if current_hour < 12 else "晚盤趨勢總結"
+def normalize(title):
+    title = re.sub(r"\s*[-－|｜]\s*[^-－|｜]{1,25}$", "", title)
+    title = re.sub(r"快訊|即時|最新|重磅|獨家", "", title)
+    return re.sub(r"[^\w\u4e00-\u9fff]", "", title.lower())
 
-    # 1. 動態抓取美股台股最新標題
-    stock_items = fetch_rss_titles("美股 台股 總經", 2)
-    stock_content = "\n".join(stock_items) if stock_items else f"• 【即時監控 {now.strftime('%H:%M')}】全球股市與總經數據連線中。"
+def fingerprint(title):
+    return hashlib.sha256(normalize(title).encode()).hexdigest()
 
-    # 2. 動態抓取房市房貸最新標題
-    re_items = fetch_rss_titles("房貸 央行 房市 信用管制", 2)
-    re_content = "\n".join(re_items) if re_items else f"• 【即時監控 {now.strftime('%H:%M')}】房市與央行政策動態連線中。"
+def fetch_news(query, category, limit=25):
+    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode({
+        "q": query, "hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        root = ET.fromstring(response.read())
+    result = []
+    for item in root.findall(".//item")[:limit]:
+        title = item.findtext("title", "").strip()
+        link = item.findtext("link", "").strip()
+        date = item.findtext("pubDate", "")
+        if not title or not date:
+            continue
+        try:
+            published = parsedate_to_datetime(date).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        result.append({"title": title, "url": link, "category": category,
+                       "published_at": published.isoformat(), "normalized_title": normalize(title),
+                       "fingerprint": fingerprint(title)})
+    return result
 
-    report = f"""
-📈 【每日財經與房市{session_name}】 - {today_str}
+def duplicate(item, seen):
+    for old in seen:
+        if item["fingerprint"] == old.get("fingerprint"):
+            return True
+        if item["url"] and item["url"] == old.get("url"):
+            return True
+        a, b = item["normalized_title"], old.get("normalized_title", "")
+        if a and b and SequenceMatcher(None, a, b).ratio() >= 0.84:
+            return True
+    return False
 
-📊 【總經與台美股市即時動態】
-{stock_content}
+def push_discord(message):
+    data = json.dumps({"content": message}, ensure_ascii=False).encode()
+    req = urllib.request.Request(DISCORD, data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return response.status in (200, 204)
 
-🏠 【房市政策與實質動態追蹤】
-{re_content}
+def push_line(message):
+    data = json.dumps({"to": LINE_GROUP, "messages": [{"type": "text", "text": message}]},
+                      ensure_ascii=False).encode()
+    req = urllib.request.Request("https://api.line.me/v2/bot/message/push", data=data,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {LINE_TOKEN}"})
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return response.status == 200
 
-💡 【系統時間戳記】
-• 雲端生成時間：{now.strftime('%Y-%m-%d %H:%M:%S')} (即時抓取，絕無重複)
-
----
-*🚀 雲端自動化即時情報推送*
-""".strip()
-    return report
-
-def send_to_discord(content):
-    if not DISCORD_WEBHOOK_URL or not content: return
-    data = json.dumps({"content": content}).encode("utf-8")
-    req = urllib.request.Request(
-        DISCORD_WEBHOOK_URL, 
-        data=data, 
-        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-    )
-    try:
-        with urllib.request.urlopen(req) as res: 
-            print("Discord 發送成功！狀態碼：", res.status)
-    except Exception as e: 
-        print("Discord 發送失敗：", e)
-
-def send_to_line(content):
-    if not LINE_TOKEN or not LINE_GROUP_ID or not content: return
-    url = "https://api.line.me/v2/bot/message/push"
-    payload_data = json.dumps({
-        "to": LINE_GROUP_ID,
-        "messages": [{"type": "text", "text": content}]
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload_data,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {LINE_TOKEN}"}
-    )
-    try:
-        with urllib.request.urlopen(req) as res: 
-            print("LINE 發送成功！狀態碼：", res.status)
-    except Exception as e: 
-        print("LINE 發送失敗：", e)
+def main():
+    now = datetime.now(TZ)
+    cutoff = (now - timedelta(hours=LOOKBACK_HOURS)).astimezone(timezone.utc).isoformat()
+    # Fail closed: never send unfiltered news if the database is unavailable.
+    seen = db_request("GET", "news_memory",
+                      urllib.parse.urlencode({"select": "title,url,normalized_title,fingerprint",
+                                              "reported_at": f"gte.{cutoff}", "limit": "1000"}))
+    searches = [
+        ("美股 台股 總經 when:2d", "市場"),
+        ("房貸 央行 房市 信用管制 when:2d", "房市"),
+    ]
+    chosen = []
+    for query, category in searches:
+        try:
+            candidates = fetch_news(query, category)
+        except Exception as exc:
+            print(f"RSS error {category}: {exc}")
+            continue
+        count = 0
+        for item in candidates:
+            if count >= 2:
+                break
+            published = datetime.fromisoformat(item["published_at"]).astimezone(TZ)
+            if published < now - timedelta(hours=24) or published > now + timedelta(minutes=10):
+                continue
+            if duplicate(item, seen + chosen):
+                continue
+            chosen.append(item)
+            count += 1
+    if not chosen:
+        print("No new articles; nothing sent.")
+        return
+    heading = "早盤重點快報" if now.hour < 12 else "晚盤趨勢總結"
+    lines = [f"📈 【每日財經與房市{heading}】 {now:%Y-%m-%d %H:%M}"]
+    for category in ("市場", "房市"):
+        items = [x for x in chosen if x["category"] == category]
+        if items:
+            lines.append(f"\n{'📊' if category == '市場' else '🏠'} 【{category}】")
+            lines.extend(f"• {x['title']}" for x in items)
+    report = "\n".join(lines)
+    # Save before sending to avoid repeat pushes after partial delivery.
+    # If a delivery fails, the log shows the error; manual recovery is required.
+    for item in chosen:
+        db_request("POST", "news_memory", payload={
+            "title": item["title"], "normalized_title": item["normalized_title"],
+            "url": item["url"], "category": item["category"],
+            "published_at": item["published_at"], "fingerprint": item["fingerprint"]})
+    failures = []
+    for name, sender in (("Discord", push_discord), ("LINE", push_line)):
+        try:
+            if not sender(report):
+                failures.append(name)
+        except Exception as exc:
+            print(f"{name} failed: {exc}")
+            failures.append(name)
+    if failures:
+        raise RuntimeError("Push failed: " + ", ".join(failures))
+    print(f"Sent {len(chosen)} new articles.")
 
 if __name__ == "__main__":
-    report_text = generate_live_report()
-    if report_text:
-        send_to_discord(report_text)
-        send_to_line(report_text)
+    main()
