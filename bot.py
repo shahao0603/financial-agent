@@ -103,6 +103,16 @@ def push_line(message):
 
 def main():
     now = datetime.now(TZ)
+    # GitHub scheduled jobs can be delayed by hours. Never send stale scheduled reports.
+    # Manual workflow_dispatch runs remain available for explicit testing.
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        minute_of_day = now.hour * 60 + now.minute
+        allowed = now.weekday() < 5 and any(
+            start <= minute_of_day < start + 30 for start in (8 * 60, 17 * 60)
+        )
+        if not allowed:
+            print(f"Scheduled run skipped: outside weekday 08:00-08:29 or 17:00-17:29 Asia/Taipei; now={now:%Y-%m-%d %H:%M %Z}")
+            return
     cutoff = (now - timedelta(hours=LOOKBACK_HOURS)).astimezone(timezone.utc).isoformat()
     # Fail closed: never send unfiltered news if the database is unavailable.
     seen = db_request("GET", "news_memory",
