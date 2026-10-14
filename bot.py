@@ -103,15 +103,18 @@ def push_line(message):
 
 def main():
     now = datetime.now(TZ)
-    # GitHub scheduled jobs can be delayed by hours. Never send stale scheduled reports.
-    # Manual workflow_dispatch runs remain available for explicit testing.
-    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-        minute_of_day = now.hour * 60 + now.minute
-        allowed = now.weekday() < 5 and any(
-            start <= minute_of_day < start + 30 for start in (8 * 60, 17 * 60)
-        )
-        if not allowed:
-            print(f"Scheduled run skipped: outside weekday 08:00-08:29 or 17:00-17:29 Asia/Taipei; now={now:%Y-%m-%d %H:%M %Z}")
+    # Scheduled retries run every 10 minutes; one report per Taiwan weekday slot.
+    scheduled = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    slot = "morning" if 8 <= now.hour < 10 else "evening" if 17 <= now.hour < 19 else None
+    if scheduled and (now.weekday() >= 5 or slot is None):
+        print(f"Scheduled run skipped outside weekday 08-10/17-19 Taiwan time: {now:%Y-%m-%d %H:%M}")
+        return
+    slot_key = f"{now:%Y-%m-%d}:{slot}" if scheduled else None
+    if slot_key:
+        existing = db_request("GET", "news_delivery_slots", urllib.parse.urlencode({
+            "select": "slot_key", "slot_key": f"eq.{slot_key}"}))
+        if existing:
+            print(f"Already claimed slot {slot_key}; skip duplicate.")
             return
     cutoff = (now - timedelta(hours=LOOKBACK_HOURS)).astimezone(timezone.utc).isoformat()
     # Fail closed: never send unfiltered news if the database is unavailable.
@@ -151,6 +154,15 @@ def main():
             lines.append(f"\n{'📊' if category == '市場' else '🏠'} 【{category}】")
             lines.extend(f"• {x['title']}" for x in items)
     report = "\n".join(lines)
+    # Atomic unique-key claim prevents duplicate reports from overlapping scheduled runs.
+    if slot_key:
+        try:
+            db_request("POST", "news_delivery_slots", payload={"slot_key": slot_key})
+        except urllib.error.HTTPError as exc:
+            if exc.code == 409:
+                print(f"Slot {slot_key} already claimed; skip duplicate.")
+                return
+            raise
     # Save before sending to avoid repeat pushes after partial delivery.
     # If a delivery fails, the log shows the error; manual recovery is required.
     for item in chosen:
