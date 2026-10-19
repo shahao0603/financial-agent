@@ -1,9 +1,6 @@
 name: Financial Agent Daily Push
 
 on:
-  schedule:
-    - cron: '*/10 0-1 * * 1-5'  # 台灣時間 08:00-09:50，延遲補發
-    - cron: '*/10 9-10 * * 1-5' # 台灣時間 17:00-18:50，延遲補發
   workflow_dispatch:
     inputs:
       delivery_slot:
