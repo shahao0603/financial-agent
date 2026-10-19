@@ -104,9 +104,13 @@ def push_line(message):
 def main():
     now = datetime.now(TZ)
     # Scheduled retries run every 10 minutes; one report per Taiwan weekday slot.
-    scheduled = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
-    slot = "morning" if 8 <= now.hour < 10 else "evening" if 17 <= now.hour < 19 else None
-    if scheduled and (now.weekday() >= 5 or slot is None):
+    requested_slot = os.environ.get("DELIVERY_SLOT", "").strip().lower()
+    if requested_slot == "test":
+        print("Scheduler test received; no news sent.")
+        return
+    scheduled = os.environ.get("GITHUB_EVENT_NAME") == "schedule" or requested_slot in ("morning", "evening")
+    slot = requested_slot if requested_slot in ("morning", "evening") else ("morning" if 8 <= now.hour < 10 else "evening" if 17 <= now.hour < 19 else None)
+    if scheduled and (now.weekday() >= 5 or slot is None or (slot == "morning" and not 8 <= now.hour < 10) or (slot == "evening" and not 17 <= now.hour < 19)):
         print(f"Scheduled run skipped outside weekday 08-10/17-19 Taiwan time: {now:%Y-%m-%d %H:%M}")
         return
     slot_key = f"{now:%Y-%m-%d}:{slot}" if scheduled else None
