@@ -5,6 +5,11 @@ on:
     - cron: '*/10 0-1 * * 1-5'  # 台灣時間 08:00-09:50，延遲補發
     - cron: '*/10 9-10 * * 1-5' # 台灣時間 17:00-18:50，延遲補發
   workflow_dispatch:
+    inputs:
+      delivery_slot:
+        description: 'morning, evening, or test'
+        required: false
+        type: string
 
 concurrency:
   group: finance-agent-news-push
@@ -22,6 +27,7 @@ jobs:
           python-version: '3.10'
       - name: Run bot script
         env:
+          DELIVERY_SLOT: ${{ inputs.delivery_slot }}
           TZ: Asia/Taipei
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
