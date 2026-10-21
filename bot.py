@@ -187,7 +187,9 @@ def main():
         summaries = summarize_items(chosen)
     except Exception as exc:
         print(f"Summary unavailable: {type(exc).__name__}")
-        summaries = ["RSS資訊不足，請閱讀原文。" for _ in chosen]
+        raise RuntimeError("Gemini summary unavailable; news not sent") from exc
+    if any("資訊不足" in summary for summary in summaries):
+        raise RuntimeError("Insufficient news summaries; nothing sent")
     lines = [f"📈 【每日財經與房市{heading}】 {now:%Y-%m-%d %H:%M}"]
     for category in ("市場", "房市"):
         items = [x for x in chosen if x["category"] == category]
