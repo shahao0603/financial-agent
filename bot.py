@@ -88,15 +88,36 @@ def summarize_items(items):
               "資訊不足就寫「RSS資訊不足，請閱讀原文」。"
               "只輸出JSON陣列，每項包含整數id和字串summary，所有id都要回覆。資料："
               + json.dumps(sources, ensure_ascii=False))
-    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-           "gemini-2.5-flash:generateContent?key=" + urllib.parse.quote(GEMINI_KEY))
+    # Discover available models instead of assuming a hard-coded model exists.
+    base = "https://generativelanguage.googleapis.com/v1beta/"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY}
+    list_req = urllib.request.Request(base + "models?pageSize=100", headers=headers)
+    try:
+        with urllib.request.urlopen(list_req, timeout=20) as resp:
+            model_data = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(700).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini model discovery HTTP {exc.code}: {detail}") from None
+    available = [m["name"] for m in model_data.get("models", [])
+                 if "generateContent" in m.get("supportedGenerationMethods", [])]
+    preferred = ("models/gemini-2.5-flash", "models/gemini-2.5-flash-lite",
+                 "models/gemini-2.0-flash")
+    model = next((name for name in preferred if name in available), None)
+    if model is None:
+        model = next((name for name in available if "flash" in name.lower()), None)
+    if model is None:
+        raise RuntimeError("No supported Gemini Flash generateContent model for this key")
     data = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"temperature": 0.1,
                                             "responseMimeType": "application/json"}}).encode()
-    req = urllib.request.Request(url, data=data,
-                                 headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=35) as resp:
-        answer = json.load(resp)
+    req = urllib.request.Request(base + model + ":generateContent", data=data,
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=35) as resp:
+            answer = json.load(resp)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(700).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Gemini generation HTTP {exc.code} model={model}: {detail}") from None
     parsed = json.loads(answer["candidates"][0]["content"]["parts"][0]["text"])
     mapping = {entry["id"]: entry["summary"].strip() for entry in parsed
                if isinstance(entry, dict) and isinstance(entry.get("id"), int)
@@ -186,7 +207,7 @@ def main():
     try:
         summaries = summarize_items(chosen)
     except Exception as exc:
-        print(f"Summary unavailable: {type(exc).__name__}")
+        print(f"Summary unavailable: {type(exc).__name__}: {str(exc)[:700]}")
         raise RuntimeError("Gemini summary unavailable; news not sent") from exc
     if any("資訊不足" in summary for summary in summaries):
         raise RuntimeError("Insufficient news summaries; nothing sent")
