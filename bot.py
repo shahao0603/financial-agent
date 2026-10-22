@@ -1,5 +1,4 @@
 import hashlib
-import html
 import urllib.error
 import json
 import os
@@ -23,7 +22,6 @@ DISCORD = os.environ["DISCORD_WEBHOOK_URL"]
 LINE_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_GROUP = os.environ["LINE_GROUP_ID"]
 LOOKBACK_HOURS = 48
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 
 def db_request(method, table, params="", payload=None):
     url = f"{DB_URL}/rest/v1/{table}" + (f"?{params}" if params else "")
@@ -53,7 +51,6 @@ def fetch_news(query, category, limit=25):
     for item in root.findall(".//item")[:limit]:
         title = item.findtext("title", "").strip()
         link = item.findtext("link", "").strip()
-        description = re.sub(r"<[^>]+>", " ", html.unescape(item.findtext("description", "")))[:600]
         date = item.findtext("pubDate", "")
         if not title or not date:
             continue
@@ -62,7 +59,7 @@ def fetch_news(query, category, limit=25):
         except (TypeError, ValueError):
             continue
         result.append({"title": title, "url": link, "category": category,
-                       "published_at": published.isoformat(), "description": description,
+                       "published_at": published.isoformat(),
                        "normalized_title": normalize(title),
                        "fingerprint": fingerprint(title)})
     return result
@@ -77,55 +74,6 @@ def duplicate(item, seen):
         if a and b and SequenceMatcher(None, a, b).ratio() >= 0.84:
             return True
     return False
-
-def summarize_items(items):
-    if not GEMINI_KEY:
-        raise RuntimeError("Gemini API key missing")
-    sources = [{"id": i, "title": x["title"], "description": x["description"]}
-               for i, x in enumerate(items)]
-    prompt = ("你是繁體中文財經編輯。只能根據RSS標題與摘要，不能假裝讀過全文，"
-              "不得杜撰數字、事實或影響。每則寫一句30至55字的重點整理，不能只是改寫標題。"
-              "資訊不足就寫「RSS資訊不足，請閱讀原文」。"
-              "只輸出JSON陣列，每項包含整數id和字串summary，所有id都要回覆。資料："
-              + json.dumps(sources, ensure_ascii=False))
-    # Discover available models instead of assuming a hard-coded model exists.
-    base = "https://generativelanguage.googleapis.com/v1beta/"
-    headers = {"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY}
-    list_req = urllib.request.Request(base + "models?pageSize=100", headers=headers)
-    try:
-        with urllib.request.urlopen(list_req, timeout=20) as resp:
-            model_data = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read(700).decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini model discovery HTTP {exc.code}: {detail}") from None
-    available = [m["name"] for m in model_data.get("models", [])
-                 if "generateContent" in m.get("supportedGenerationMethods", [])]
-    preferred = ("models/gemini-2.5-flash", "models/gemini-2.5-flash-lite",
-                 "models/gemini-2.0-flash")
-    model = next((name for name in preferred if name in available), None)
-    if model is None:
-        model = next((name for name in available if "flash" in name.lower()), None)
-    if model is None:
-        raise RuntimeError("No supported Gemini Flash generateContent model for this key")
-    data = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
-                       "generationConfig": {"temperature": 0.1,
-                                            "responseMimeType": "application/json"}}).encode()
-    req = urllib.request.Request(base + model + ":generateContent", data=data,
-                                 headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=35) as resp:
-            answer = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read(700).decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini generation HTTP {exc.code} model={model}: {detail}") from None
-    parsed = json.loads(answer["candidates"][0]["content"]["parts"][0]["text"])
-    mapping = {entry["id"]: entry["summary"].strip() for entry in parsed
-               if isinstance(entry, dict) and isinstance(entry.get("id"), int)
-               and isinstance(entry.get("summary"), str)}
-    if len(mapping) != len(items):
-        raise ValueError("Incomplete Gemini summaries")
-    return [mapping[i][:110] for i in range(len(items))]
-
 
 def push_discord(message):
     # Never print the webhook URL: it contains a secret token.
@@ -191,7 +139,7 @@ def main():
             continue
         count = 0
         for item in candidates:
-            if count >= 4:
+            if count >= 2:
                 break
             published = datetime.fromisoformat(item["published_at"]).astimezone(TZ)
             if published < now - timedelta(hours=24) or published > now + timedelta(minutes=10):
@@ -204,25 +152,13 @@ def main():
         print("No new articles; nothing sent.")
         return
     heading = "早盤重點快報" if now.hour < 12 else "晚盤趨勢總結"
-    try:
-        summaries = summarize_items(chosen)
-    except Exception as exc:
-        print(f"Summary unavailable: {type(exc).__name__}: {str(exc)[:700]}")
-        raise RuntimeError("Gemini summary unavailable; news not sent") from exc
-    if any("資訊不足" in summary for summary in summaries):
-        raise RuntimeError("Insufficient news summaries; nothing sent")
     lines = [f"📈 【每日財經與房市{heading}】 {now:%Y-%m-%d %H:%M}"]
     for category in ("市場", "房市"):
         items = [x for x in chosen if x["category"] == category]
         if items:
             lines.append(f"\n{'📊' if category == '市場' else '🏠'} 【{category}】")
-            for x in items:
-                lines.append(f"• {summaries[chosen.index(x)]}\n  原文：{x['url']}")
+            lines.extend(f"• {x['title']}" for x in items)
     report = "\n".join(lines)
-    if len(report) > 1900:
-        report = "\n".join([lines[0]] + [f"• {summaries[i][:65]}\n{x['url']}" for i, x in enumerate(chosen[:6])])
-    if len(report) > 1900:
-        report = report[:1890] + "…"
     # Atomic unique-key claim prevents duplicate reports from overlapping scheduled runs.
     if slot_key:
         try:
