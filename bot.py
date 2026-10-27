@@ -148,6 +148,16 @@ def main():
                 continue
             chosen.append(item)
             count += 1
+    # news_memory.fingerprint is UNIQUE across all time, not only the 48h
+    # lookback used for similarity checks. Exclude previously stored articles
+    # before building the report to prevent HTTP 409 and partial writes.
+    if chosen:
+        fingerprint_filter = "in.(" + ",".join(x["fingerprint"] for x in chosen) + ")"
+        existing = db_request("GET", "news_memory", urllib.parse.urlencode({
+            "select": "fingerprint", "fingerprint": fingerprint_filter
+        }))
+        stored = {row["fingerprint"] for row in existing}
+        chosen = [item for item in chosen if item["fingerprint"] not in stored]
     if not chosen:
         print("No new articles; nothing sent.")
         return
@@ -171,10 +181,16 @@ def main():
     # Save before sending to avoid repeat pushes after partial delivery.
     # If a delivery fails, the log shows the error; manual recovery is required.
     for item in chosen:
-        db_request("POST", "news_memory", payload={
+        try:
+            db_request("POST", "news_memory", payload={
             "title": item["title"], "normalized_title": item["normalized_title"],
             "url": item["url"], "category": item["category"],
             "published_at": item["published_at"], "fingerprint": item["fingerprint"]})
+        except urllib.error.HTTPError as exc:
+            if exc.code == 409:
+                print("News fingerprint already stored; continuing instead of aborting.")
+                continue
+            raise
     failures = []
     for name, sender in (("Discord", push_discord), ("LINE", push_line)):
         try:
